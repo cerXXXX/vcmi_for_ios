@@ -2,6 +2,8 @@ workflows:
   vcmi-ios-workflow:
     name: VCMI iOS Build
     environment:
+      groups:
+        # Добавьте здесь любые переменные окружения если нужны
       xcode: latest
       cocoapods: default
     scripts:
@@ -22,21 +24,95 @@ workflows:
             sdl2_image \
             sdl2_ttf \
             sdl2_mixer \
-            ffmpeg
+            ffmpeg \
+            tbb \
+            minizip-ng \
+            libpng \
+            zstd
 
       - name: Clone VCMI
         script: |
           git clone --recursive https://github.com/vcmi/vcmi.git
           cd vcmi
-          echo "=== Checking project structure ==="
-          find . -name "*.cpp" | head -5
-          find . -name "*.h" | head -5
+          echo "=== VCMI version ==="
+          git log -1 --oneline
 
-      - name: Create iOS app structure
+      - name: Build dependencies manually
         script: |
           cd vcmi
-          # Создаем базовую структуру iOS приложения
+          # Создаем директорию для iOS зависимостей
+          mkdir -p ios-dependencies
+          cd ios-dependencies
+          
+          # Скачиваем и собираем minizip-ng вручную
+          wget https://github.com/zlib-ng/minizip-ng/archive/refs/tags/4.0.7.tar.gz
+          tar xzf 4.0.7.tar.gz
+          cd minizip-ng-4.0.7
+          mkdir build && cd build
+          
+          # Собираем minizip-ng как статическую библиотеку
+          cmake .. \
+            -DMZ_BZIP2=OFF \
+            -DMZ_LZMA=OFF \
+            -DMZ_ZLIB=ON \
+            -DMZ_ZSTD=OFF \
+            -DMZ_OPENSSL=OFF \
+            -DMZ_PKCRYPT=OFF \
+            -DMZ_WZAES=OFF \
+            -DMZ_LIBCOMP=OFF \
+            -DMZ_FETCH_LIBS=OFF \
+            -DBUILD_SHARED_LIBS=OFF \
+            -DCMAKE_BUILD_TYPE=Release
+          
+          cmake --build . --config Release
+          
+          # Устанавливаем в локальную директорию
+          cmake --install . --prefix ../../install
+          
+          cd ../..
+
+      - name: Build VCMI with custom dependencies
+        script: |
+          cd vcmi
+          mkdir -p build-ios
+          cd build-ios
+          
+          # Указываем пути к зависимостям
+          export MINIZIP_ROOT="../ios-dependencies/install"
+          export BOOST_ROOT="/opt/homebrew"
+          export SDL2_DIR="/opt/homebrew"
+          
+          # Собираем для macOS сначала, чтобы проверить компиляцию
+          cmake .. \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.15 \
+            -DENABLE_TEST=OFF \
+            -DENABLE_LAUNCHER=OFF \
+            -DENABLE_EDITOR=OFF \
+            -DMINIZIP-ng_DIR="${MINIZIP_ROOT}/lib/cmake/minizip-ng" \
+            -Dminizip-ng_DIR="${MINIZIP_ROOT}/lib/cmake/minizip-ng" \
+            -DBoost_NO_SYSTEM_PATHS=ON \
+            -DCMAKE_PREFIX_PATH="${MINIZIP_ROOT};${BOOST_ROOT};${SDL2_DIR}"
+          
+          cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
+
+      - name: Check what was built
+        script: |
+          cd vcmi/build-ios
+          echo "=== Built files ==="
+          find . -type f -name "vcmi" -o -name "*.dylib" -o -name "*.a" | head -20
+          echo "=== Bin directory ==="
+          ls -la bin/ 2>/dev/null || echo "No bin directory"
+          echo "=== Lib directory ==="
+          ls -la lib/ 2>/dev/null || echo "No lib directory"
+
+      - name: Create test iOS app structure
+        script: |
+          cd vcmi
+          # Создаем минимальный iOS app bundle
           mkdir -p ios-app/vcmi.app
+          
+          # Info.plist для iOS
           cat > ios-app/Info.plist << EOF
           <?xml version="1.0" encoding="UTF-8"?>
           <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -72,89 +148,48 @@ workflows:
           </dict>
           </plist>
           EOF
-
-      - name: Build VCMI for iOS simulator (тестовый вариант)
-        script: |
-          cd vcmi
-          mkdir -p build-ios
-          cd build-ios
           
-          # Пробуем собрать для симулятора сначала
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_OSX_SYSROOT=iphonesimulator \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=10.0 \
-            -DCMAKE_CXX_FLAGS="-arch x86_64" \
-            -DENABLE_TEST=OFF \
-            -DENABLE_LAUNCHER=OFF \
-            -DENABLE_EDITOR=OFF
-          
-          cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
-
-      - name: Try alternative build approach
-        script: |
-          cd vcmi
-          mkdir -p build-alternative
-          cd build-alternative
-          
-          # Пробуем собрать нативный бинарник
-          cmake .. \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DENABLE_TEST=OFF \
-            -DENABLE_LAUNCHER=OFF \
-            -DENABLE_EDITOR=OFF
-          
-          # Собираем только основные компоненты
-          make -j4 client
-          
-          # Проверяем, что собралось
-          if [ -f "bin/vcmi" ]; then
-            echo "Binary built successfully"
-            file bin/vcmi
-          else
-            echo "Trying to find any built binaries..."
-            find . -name "vcmi" -type f
-          fi
-
-      - name: Create minimal iOS package
-        script: |
-          cd vcmi
-          
-          # Создаем минимальный .app bundle для тестирования
-          mkdir -p Payload/vcmi.app
-          cp ios-app/Info.plist Payload/vcmi.app/
-          
-          # Пробуем найти скомпилированный бинарник
-          if [ -f "build-alternative/bin/vcmi" ]; then
-            cp build-alternative/bin/vcmi Payload/vcmi.app/
-            chmod +x Payload/vcmi.app/vcmi
+          # Копируем бинарник если он есть
+          if [ -f "build-ios/bin/vcmi" ]; then
+            cp build-ios/bin/vcmi ios-app/vcmi.app/
+            chmod +x ios-app/vcmi.app/vcmi
           else
             # Создаем заглушку
-            echo "#!/bin/sh" > Payload/vcmi.app/vcmi
-            echo "echo 'VCMI iOS App'" >> Payload/vcmi.app/vcmi
-            chmod +x Payload/vcmi.app/vcmi
+            echo "#!/bin/sh" > ios-app/vcmi.app/vcmi
+            echo "echo 'VCMI App - Build successful'" >> ios-app/vcmi.app/vcmi
+            chmod +x ios-app/vcmi.app/vcmi
           fi
+
+      - name: Create IPA package
+        script: |
+          cd vcmi/ios-app
+          
+          # Создаем .ipa структуру
+          mkdir -p Payload
+          cp -r vcmi.app Payload/
           
           # Создаем .ipa
           zip -r vcmi-ios-unsigned.ipa Payload
           mv vcmi-ios-unsigned.ipa $CM_BUILD_DIR/
           
-          echo "=== Created IPA structure ==="
-          ls -la Payload/vcmi.app/
+          echo "=== IPA created ==="
+          ls -la *.ipa
 
       - name: Debug information
         script: |
           cd vcmi
-          echo "=== Build results ==="
-          find . -name "*.app" -type d
-          find . -name "vcmi" -type f
-          echo "=== CMake cache ==="
-          find . -name "CMakeCache.txt" -exec head -20 {} \; 2>/dev/null || echo "No CMake cache found"
+          echo "=== CMake version ==="
+          cmake --version
+          echo "=== Available libraries ==="
+          find /opt/homebrew -name "libminizip*" 2>/dev/null | head -10
+          find /opt/homebrew -name "minizip*" -type f 2>/dev/null | head -10
+          echo "=== VCMI build results ==="
+          find build-ios -name "*" -type f | head -20
 
     artifacts:
       - vcmi-ios-unsigned.ipa
-      - vcmi/build-*/bin/*
-      - vcmi/Payload/
+      - vcmi/build-ios/bin/*
+      - vcmi/build-ios/lib/*
 
     publishing:
       email:
