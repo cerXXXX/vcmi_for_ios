@@ -2,8 +2,6 @@ workflows:
   vcmi-ios-workflow:
     name: VCMI iOS Build
     environment:
-      groups:
-        # Добавьте здесь любые переменные окружения если нужны
       xcode: latest
       cocoapods: default
     scripts:
