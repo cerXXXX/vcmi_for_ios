@@ -15,83 +15,118 @@ workflows:
             cmake \
             gettext \
             ninja \
-            wget
+            wget \
+            git
 
       - name: Clone VCMI with submodules
         script: |
-          git clone --recursive --depth 1 https://github.com/vcmi/vcmi.git
+          git clone --recursive https://github.com/vcmi/vcmi.git
           cd vcmi
+          # Переключаемся на стабильную ветку если нужно
+          # git checkout master
 
       - name: Build iOS dependencies
         script: |
           cd vcmi
-          chmod +x ios-build-dependencies.sh
-          # Собираем зависимости для iOS
-          ./ios-build-dependencies.sh
+          # Согласно репозиторию, скрипты находятся в корне
+          if [ -f "ios/build-dependencies.sh" ]; then
+            cd ios
+            chmod +x build-dependencies.sh
+            ./build-dependencies.sh
+          elif [ -f "build-ios-dependencies.sh" ]; then
+            chmod +x build-ios-dependencies.sh
+            ./build-ios-dependencies.sh
+          else
+            echo "Available build scripts:"
+            find . -name "*.sh" -type f | grep -E "(ios|build)" | head -20
+            echo "Trying to use iOS directory structure..."
+            if [ -d "ios" ]; then
+              cd ios
+              ls -la
+            fi
+            exit 1
+          fi
 
-      - name: Configure VCMI project
+      - name: Build VCMI using iOS build script
         script: |
           cd vcmi
-          mkdir -p build-ios
-          cd build-ios
-
-          # Получаем путь к iOS SDK
-          export SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          
-          # Конфигурация CMake согласно документации VCMI
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=../cmake/ios.toolchain.cmake \
-            -DPLATFORM=OS64 \
-            -DDEPLOYMENT_TARGET=10.0 \
-            -DENABLE_BITCODE=OFF \
-            -DCMAKE_BUILD_TYPE=Release \
-            -DCMAKE_PREFIX_PATH=../ios-dependencies/install \
-            -DBOOST_ROOT=../ios-dependencies/install \
-            -DBoost_NO_SYSTEM_PATHS=ON \
-            -DCMAKE_FIND_ROOT_PATH=../ios-dependencies/install \
-            -DCMAKE_FRAMEWORK_PATH=../ios-dependencies/install \
-            -DENABLE_TEST=OFF \
-            -DENABLE_LAUNCHER=OFF \
-            -DENABLE_EDITOR=OFF
-
-      - name: Build VCMI
-        script: |
-          cd vcmi/build-ios
-          # Компиляция с использованием ninja (рекомендуется в документации VCMI)
-          cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
+          # Используем официальный скрипт сборки для iOS если существует
+          if [ -f "ios/build-vcmi.sh" ]; then
+            cd ios
+            chmod +x build-vcmi.sh
+            ./build-vcmi.sh
+          else
+            echo "Using manual CMake build..."
+            mkdir -p build-ios
+            cd build-ios
+            
+            # Определяем путь к зависимостям
+            DEPENDENCIES_PATH="../ios/dependencies/install"
+            if [ ! -d "$DEPENDENCIES_PATH" ]; then
+              DEPENDENCIES_PATH="../dependencies/install"
+            fi
+            
+            echo "Using dependencies from: $DEPENDENCIES_PATH"
+            
+            # Конфигурация согласно официальным скриптам VCMI
+            cmake .. \
+              -DCMAKE_TOOLCHAIN_FILE=../cmake/toolchains/ios.toolchain.cmake \
+              -DPLATFORM=OS64 \
+              -DDEPLOYMENT_TARGET=10.0 \
+              -DENABLE_BITCODE=OFF \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_PREFIX_PATH="$DEPENDENCIES_PATH" \
+              -DBOOST_ROOT="$DEPENDENCIES_PATH" \
+              -DBoost_NO_SYSTEM_PATHS=ON \
+              -DCMAKE_FIND_ROOT_PATH="$DEPENDENCIES_PATH" \
+              -DENABLE_TEST=OFF \
+              -DENABLE_LAUNCHER=OFF \
+              -DENABLE_EDITOR=OFF \
+              -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGNING_ALLOWED=NO \
+              -DCMAKE_XCODE_ATTRIBUTE_CODE_SIGN_IDENTITY=""
+            
+            cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
+          fi
 
       - name: Create IPA package
         script: |
-          cd vcmi/build-ios
-          
-          # Создание директории для .ipa
-          mkdir -p Payload
-          
-          # Поиск .app bundle (должен быть в bin/Release)
-          if [ -d "bin/Release/vcmi.app" ]; then
-            cp -r "bin/Release/vcmi.app" Payload/
+          cd vcmi
+          # Ищем собранное приложение
+          if [ -d "build-ios/Release-iphoneos/vcmi.app" ]; then
+            APP_PATH="build-ios/Release-iphoneos/vcmi.app"
+          elif [ -d "build-ios/bin/Release/vcmi.app" ]; then
+            APP_PATH="build-ios/bin/Release/vcmi.app"
+          elif [ -d "ios/build/Release-iphoneos/vcmi.app" ]; then
+            APP_PATH="ios/build/Release-iphoneos/vcmi.app"
           else
-            # Альтернативный поиск
-            APP_BUNDLE=$(find . -name "*.app" -type d | head -1)
-            if [ -z "$APP_BUNDLE" ]; then
-              echo "Error: No .app bundle found!"
+            echo "Searching for .app bundle..."
+            APP_PATH=$(find . -name "vcmi.app" -type d | head -1)
+            if [ -z "$APP_PATH" ]; then
+              echo "Error: No vcmi.app bundle found!"
               find . -name "*.app" -type d
               exit 1
             fi
-            echo "Found app bundle: $APP_BUNDLE"
-            cp -r "$APP_BUNDLE" Payload/
           fi
           
-          # Создание .ipa без подписи
-          zip -r vcmi-ios-unsigned.ipa Payload
+          echo "Found app bundle at: $APP_PATH"
           
-          # Перемещение .ipa в корень проекта
+          # Создание .ipa без подписи
+          mkdir -p Payload
+          cp -r "$APP_PATH" Payload/
+          zip -r vcmi-ios-unsigned.ipa Payload
           mv vcmi-ios-unsigned.ipa $CM_BUILD_DIR/
+
+      - name: Verify build artifacts
+        script: |
+          echo "=== Build artifacts ==="
+          find vcmi -name "*.app" -type d | head -5
+          find vcmi -name "*.ipa" -type f | head -5
+          ls -la *.ipa || echo "No IPA in root directory"
 
     artifacts:
       - vcmi-ios-unsigned.ipa
-      - vcmi/build-ios/**/*.app
-      - vcmi/build-ios/bin/Release/*.app
+      - vcmi/**/*.app
+      - vcmi/build-ios/**/*
 
     publishing:
       email:
