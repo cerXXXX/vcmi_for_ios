@@ -24,16 +24,16 @@ workflows:
           echo ">>> sync & init submodules (robust)"
           git submodule sync --recursive || true
 
-          # Try init+update recursively (shallow first to speed up)
+          # Try shallow update first
           git submodule update --init --recursive --depth 1 || true
 
-          # Try full update if still missing
+          # If dependencies missing, try full update
           if [ ! -d dependencies ]; then
             echo "dependencies not found after shallow update — trying full update"
             git submodule update --init --recursive || true
           fi
 
-          # If still missing, try to clone the submodule directly (public repo)
+          # If still missing, try direct clone of public repo
           if [ ! -d dependencies ]; then
             echo "dependencies still missing — attempting direct clone of vcmi-dependencies"
             git clone --depth 1 https://github.com/vcmi/vcmi-dependencies.git dependencies || {
@@ -42,29 +42,28 @@ workflows:
             }
           fi
 
-          # Ensure Git LFS is initialized and pull LFS objects for repo and submodule
+          # Pull LFS objects (without --all flag)
           git lfs install || true
-          echo "Running git lfs pull in repo root..."
           git lfs pull || true
-          echo "Running git lfs pull in dependencies/ (if present)..."
           if [ -d dependencies ]; then
             (cd dependencies && git lfs pull) || true
           fi
 
           echo ">>> Submodule status:"
           git submodule status --recursive || true
-          echo ">>> Listing dependencies directory (first 200 lines):"
+          echo ">>> Listing dependencies directory (first 200 entries):"
           ls -la dependencies || true
           ls -la dependencies | sed -n '1,200p' || true
 
       - name: Create Conan profiles (safe, no heredoc indentation issues)
         script: |
           mkdir -p ~/.conan2/profiles
-          # default build profile (macOS) - adjust arch/compiler version if needed
+
+          # default build profile (macOS) - use valid os.version (13.0)
           printf '%s\n' \
             '[settings]' \
             'os=Macos' \
-            'os.version=13' \
+            'os.version=13.0' \
             'arch=x86_64' \
             'compiler=apple-clang' \
             'compiler.version=14' \
@@ -72,7 +71,7 @@ workflows:
             'build_type=Release' > ~/.conan2/profiles/default
           echo "Created ~/.conan2/profiles/default"
 
-          # ios host profile
+          # ios host profile (for device)
           printf '%s\n' \
             '[settings]' \
             'os=iOS' \
