@@ -8,7 +8,7 @@ workflows:
         BUILD_PRESET: "ios-release-conan"
         BUILD_TYPE: "Release"
         BUNDLE_IDENTIFIER_PREFIX: "com.example"
-        DEVELOPMENT_TEAM: ""
+        DEVELOPMENT_TEAM: "0000000000"
         APP_NAME: "VCMI"
     scripts:
       - name: Install dependencies
