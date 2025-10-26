@@ -2,7 +2,7 @@ workflows:
   ios-workflow:
     name: VCMI iOS Build
     environment:
-      xcode: 14.2 # Xcode версии, которая поддерживает iOS 10
+      xcode: latest # Используем последнюю поддерживаемую версию
       cocoapods: default
     scripts:
       - name: Install system dependencies
@@ -21,29 +21,36 @@ workflows:
           git clone --recursive https://github.com/vcmi/vcmi.git
           cd vcmi
 
-      - name: Build dependencies
+      - name: Configure for iOS
         script: |
           cd vcmi
           mkdir -p build-ios
           cd build-ios
 
-          # Установка переменных для iOS кросс-компиляции
-          export IOS_VERSION_MIN=10.0
-          export IOS_SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
-          export IOS_CMAKE_FLAGS="\
+          # Определяем минимальную версию iOS
+          export IOS_DEPLOYMENT_TARGET=10.0
+          
+          # Получаем путь к SDK
+          export SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
+          export SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+
+          echo "Using iOS SDK: $SDK_PATH"
+          echo "SDK Version: $SDK_VERSION"
+
+      - name: Build dependencies
+        script: |
+          cd vcmi/build-ios
+          
+          # Конфигурация CMake для iOS
+          cmake .. \
             -DCMAKE_SYSTEM_NAME=iOS \
             -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_VERSION_MIN \
-            -DCMAKE_IOS_INSTALL_COMBINED=YES \
-            -DCMAKE_INSTALL_PREFIX=../install-ios \
-            -DCMAKE_BUILD_TYPE=Release"
-
-          # Сборка зависимостей
-          cmake .. $IOS_CMAKE_FLAGS \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_DEPLOYMENT_TARGET \
+            -DCMAKE_BUILD_TYPE=Release \
             -DENABLE_TEST=OFF \
             -DENABLE_LAUNCHER=OFF \
             -DENABLE_EDITOR=OFF \
-            -DENABLE_PCH=OFF
+            -DCMAKE_INSTALL_PREFIX=../install-ios
 
       - name: Build VCMI
         script: |
@@ -52,13 +59,23 @@ workflows:
           # Компиляция проекта
           cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Create IPA
+      - name: Create IPA package
         script: |
           cd vcmi/build-ios
           
-          # Создание структуры .ipa
+          # Создание директории для .ipa
           mkdir -p Payload
-          cp -r bin/Release/*.app Payload/
+          
+          # Поиск и копирование .app bundle
+          APP_BUNDLE=$(find . -name "*.app" -type d | head -1)
+          if [ -z "$APP_BUNDLE" ]; then
+            echo "Error: No .app bundle found!"
+            find . -name "*.app" -type d
+            exit 1
+          fi
+          
+          echo "Found app bundle: $APP_BUNDLE"
+          cp -r "$APP_BUNDLE" Payload/
           
           # Создание .ipa без подписи
           zip -r vcmi-ios-unsigned.ipa Payload
@@ -68,7 +85,7 @@ workflows:
 
     artifacts:
       - vcmi-ios-unsigned.ipa
-      - vcmi/build-ios/bin/Release/*.app
+      - vcmi/build-ios/**/*.app
 
     publishing:
       email:
