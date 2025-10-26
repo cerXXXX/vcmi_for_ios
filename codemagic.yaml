@@ -19,23 +19,43 @@ workflows:
           conan --version
           cmake --version
 
-      - name: Ensure submodules (dependencies) are present
+      - name: Ensure submodules (dependencies) are present (robust)
         script: |
-          echo ">>> sync & init submodules"
+          echo ">>> sync & init submodules (robust)"
           git submodule sync --recursive || true
-          git submodule update --init --recursive --jobs 4 || true
-          git lfs pull --all || true
+
+          # Try init+update recursively (shallow first to speed up)
+          git submodule update --init --recursive --depth 1 || true
+
+          # Try full update if still missing
+          if [ ! -d dependencies ]; then
+            echo "dependencies not found after shallow update — trying full update"
+            git submodule update --init --recursive || true
+          fi
+
+          # If still missing, try to clone the submodule directly (public repo)
+          if [ ! -d dependencies ]; then
+            echo "dependencies still missing — attempting direct clone of vcmi-dependencies"
+            git clone --depth 1 https://github.com/vcmi/vcmi-dependencies.git dependencies || {
+              echo "Direct clone of dependencies failed — aborting"
+              exit 1
+            }
+          fi
+
+          # Ensure Git LFS is initialized and pull LFS objects for repo and submodule
+          git lfs install || true
+          echo "Running git lfs pull in repo root..."
+          git lfs pull || true
+          echo "Running git lfs pull in dependencies/ (if present)..."
+          if [ -d dependencies ]; then
+            (cd dependencies && git lfs pull) || true
+          fi
+
           echo ">>> Submodule status:"
           git submodule status --recursive || true
-          echo ">>> Look for 'dependencies' directory:"
-          if [ -d dependencies ]; then
-            echo "Found dependencies/"
-            ls -la dependencies | sed -n '1,200p'
-          else
-            echo "ERROR: 'dependencies' directory not found. Check .gitmodules and submodules in your fork."
-            cat .gitmodules || true
-            exit 1
-          fi
+          echo ">>> Listing dependencies directory (first 200 lines):"
+          ls -la dependencies || true
+          ls -la dependencies | sed -n '1,200p' || true
 
       - name: Create Conan profiles (safe, no heredoc indentation issues)
         script: |
