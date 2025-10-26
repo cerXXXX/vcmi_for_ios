@@ -1,7 +1,7 @@
 workflows:
   build-vcmi-ios:
     name: Build VCMI iOS (Release)
-    max_build_duration: 120
+    max_build_duration: 180
     environment:
       xcode: latest
       vars:
@@ -19,42 +19,64 @@ workflows:
           conan --version
           cmake --version
 
-      - name: Ensure submodules are present (important!)
+      - name: Ensure submodules (dependencies) are present
         script: |
-          echo ">>> Updating submodules"
+          echo ">>> sync & init submodules"
           git submodule sync --recursive || true
-          git submodule update --init --recursive --jobs 4
-          echo ">>> Submodule tree:"
+          git submodule update --init --recursive --jobs 4 || true
+          git lfs pull --all || true
+          echo ">>> Submodule status:"
           git submodule status --recursive || true
-          echo ">>> Repo root listing:"
-          ls -la
+          echo ">>> Look for 'dependencies' directory:"
+          if [ -d dependencies ]; then
+            echo "Found dependencies/"
+            ls -la dependencies | sed -n '1,200p'
+          else
+            echo "ERROR: 'dependencies' directory not found. Check .gitmodules and submodules in your fork."
+            cat .gitmodules || true
+            exit 1
+          fi
 
-      - name: Create iOS build profile for Conan (ios-armv8)
+      - name: Create Conan profiles (safe, no heredoc indentation issues)
         script: |
           mkdir -p ~/.conan2/profiles
-          cat > ~/.conan2/profiles/ios-armv8 <<'EOF'
-          [settings]
-          os=iOS
-          os.version=10.0
-          arch=armv8
-          compiler=apple-clang
-          compiler.cppstd=17
-          compiler.libcxx=libc++
-          build_type=Release
-          [conf]
-          tools.build:cxxflags=["-stdlib=libc++"]
-          tools.build:compiler_executables={"c": "clang", "cpp": "clang++"}
-          EOF
-          echo "✅ Created Conan profile ios-armv8"
-          echo "Profile contents:"
-          cat ~/.conan2/profiles/ios-armv8
+          # default build profile (macOS) - adjust arch/compiler version if needed
+          printf '%s\n' \
+            '[settings]' \
+            'os=Macos' \
+            'os.version=13' \
+            'arch=x86_64' \
+            'compiler=apple-clang' \
+            'compiler.version=14' \
+            'compiler.libcxx=libc++' \
+            'build_type=Release' > ~/.conan2/profiles/default
+          echo "Created ~/.conan2/profiles/default"
 
-      - name: Run Conan to install dependencies (with PYTHONPATH)
+          # ios host profile
+          printf '%s\n' \
+            '[settings]' \
+            'os=iOS' \
+            'os.version=10.0' \
+            'arch=armv8' \
+            'compiler=apple-clang' \
+            'compiler.cppstd=17' \
+            'compiler.libcxx=libc++' \
+            'build_type=Release' \
+            '' \
+            '[conf]' \
+            'tools.build:cxxflags=["-stdlib=libc++"]' \
+            'tools.build:compiler_executables={"c": "clang", "cpp": "clang++"}' > ~/.conan2/profiles/ios-armv8
+          echo "Created ~/.conan2/profiles/ios-armv8"
+
+          ls -la ~/.conan2/profiles || true
+          echo "---- default ----"
+          cat ~/.conan2/profiles/default || true
+          echo "---- ios-armv8 ----"
+          cat ~/.conan2/profiles/ios-armv8 || true
+
+      - name: Run Conan install (with PYTHONPATH)
         script: |
           echo "PWD: $PWD"
-          echo "Listing repo before conan install (check for 'dependencies' folder):"
-          ls -la
-          # Ensure Python path contains repo root so conanfile.py can import 'dependencies'
           export PYTHONPATH="$PWD:$PYTHONPATH"
           echo "PYTHONPATH=$PYTHONPATH"
           conan install . \
