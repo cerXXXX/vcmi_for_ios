@@ -1,39 +1,51 @@
 workflows:
   build-vcmi-ios:
-    name: Build VCMI for iPadOS 10
+    name: Build VCMI iOS (Release)
     max_build_duration: 120
     environment:
-      vars:
-        BUILD_TYPE: "Release"
-        IOS_DEPLOYMENT_TARGET: "10.0"
-        APP_NAME: "VCMI"
       xcode: latest
-      cocoapods: default
+      vars:
+        BUILD_PRESET: "ios-release-conan"
+        BUILD_TYPE: "Release"
+        BUNDLE_IDENTIFIER_PREFIX: "com.example"
+        DEVELOPMENT_TEAM: ""
+        APP_NAME: "VCMI"
     scripts:
       - name: Install dependencies
         script: |
-          brew install cmake boost sdl2 sdl2_image sdl2_mixer sdl2_ttf
+          brew install cmake conan ccache
+          conan profile detect --force
+          # Conan home cache fix for Codemagic
+          mkdir -p ~/.conan2
+          echo "Detected Conan profile:"
+          cat ~/.conan2/profiles/default || true
 
-      - name: Configure CMake for iOS
+      - name: Configure project with CMake preset
         script: |
-          mkdir -p build && cd build
-          cmake .. \
-            -DCMAKE_TOOLCHAIN_FILE=../ios.toolchain.cmake \
-            -DIOS_PLATFORM=OS \
-            -DIOS_DEPLOYMENT_TARGET=$IOS_DEPLOYMENT_TARGET \
-            -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+          cmake --preset $BUILD_PRESET \
+            -D BUNDLE_IDENTIFIER_PREFIX=$BUNDLE_IDENTIFIER_PREFIX \
+            -D CMAKE_BUILD_TYPE=$BUILD_TYPE \
+            -D ENABLE_CCACHE=ON
 
-      - name: Build VCMI
+      - name: Build VCMI via CMake
         script: |
-          cd build
-          cmake --build . --config $BUILD_TYPE
+          cmake --build build-$BUILD_PRESET --target vcmiclient -- -quiet
 
-      - name: Package .ipa
+      - name: Package IPA using CPack
         script: |
-          cd build
-          mkdir -p Payload
-          cp -r VCMI.app Payload/
-          zip -r $APP_NAME.ipa Payload
+          cd build-$BUILD_PRESET
+          cpack -C Release || true
+          # Rename zip to ipa if necessary
+          if [ -f *.zip ]; then
+            ZIPFILE=$(ls *.zip | head -n 1)
+            mv "$ZIPFILE" "${ZIPFILE%.zip}.ipa"
+          fi
 
     artifacts:
-      - build/*.ipa
+      - build-ios-release-conan/*.ipa
+      - build-ios-release-conan/*.zip
+
+    publishing:
+      email:
+        recipients:
+          - your_email@example.com
