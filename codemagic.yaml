@@ -2,8 +2,6 @@ workflows:
   ios-workflow:
     name: VCMI iOS Build
     environment:
-      groups:
-        # Добавьте здесь любые переменные окружения если нужны
       xcode: 14.2 # Xcode версии, которая поддерживает iOS 10
       cocoapods: default
     scripts:
