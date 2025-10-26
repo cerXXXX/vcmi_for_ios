@@ -1,7 +1,7 @@
 workflows:
   build-vcmi-ios:
     name: Build VCMI iOS (Release)
-    max_build_duration: 120
+    max_build_duration: 180
     environment:
       xcode: latest
       vars:
@@ -11,14 +11,27 @@ workflows:
         DEFAULT_TEAM: "0000000000"
         APP_NAME: "VCMI"
     scripts:
-      - name: Install dependencies
+      - name: Install system dependencies
         script: |
-          brew install cmake conan ccache
-          conan profile detect --force
-          mkdir -p ~/.conan2/profiles
+          brew update
+          brew install cmake conan ccache git git-lfs
+          git lfs install || true
+          conan --version
+          cmake --version
 
-      - name: Create iOS build profile for Conan
+      - name: Ensure submodules are present (important!)
         script: |
+          echo ">>> Updating submodules"
+          git submodule sync --recursive || true
+          git submodule update --init --recursive --jobs 4
+          echo ">>> Submodule tree:"
+          git submodule status --recursive || true
+          echo ">>> Repo root listing:"
+          ls -la
+
+      - name: Create iOS build profile for Conan (ios-armv8)
+        script: |
+          mkdir -p ~/.conan2/profiles
           cat > ~/.conan2/profiles/ios-armv8 <<'EOF'
           [settings]
           os=iOS
@@ -33,10 +46,17 @@ workflows:
           tools.build:compiler_executables={"c": "clang", "cpp": "clang++"}
           EOF
           echo "✅ Created Conan profile ios-armv8"
+          echo "Profile contents:"
           cat ~/.conan2/profiles/ios-armv8
 
-      - name: Run Conan to install dependencies
+      - name: Run Conan to install dependencies (with PYTHONPATH)
         script: |
+          echo "PWD: $PWD"
+          echo "Listing repo before conan install (check for 'dependencies' folder):"
+          ls -la
+          # Ensure Python path contains repo root so conanfile.py can import 'dependencies'
+          export PYTHONPATH="$PWD:$PYTHONPATH"
+          echo "PYTHONPATH=$PYTHONPATH"
           conan install . \
             --output-folder=conan-generated \
             --build=missing \
@@ -59,12 +79,14 @@ workflows:
 
       - name: Package IPA using CPack
         script: |
-          cd build-$BUILD_PRESET
+          cd build-$BUILD_PRESET || exit 1
           cpack -C Release || true
           if ls *.zip >/dev/null 2>&1; then
             ZIPFILE=$(ls *.zip | head -n 1)
             mv "$ZIPFILE" "${ZIPFILE%.zip}.ipa"
           fi
+          echo "Artifacts in $(pwd):"
+          ls -la
 
     artifacts:
       - build-ios-release-conan/*.ipa
