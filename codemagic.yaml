@@ -1,8 +1,10 @@
 workflows:
-  ios-workflow:
+  vcmi-ios-workflow:
     name: VCMI iOS Build
     environment:
-      xcode: latest # Используем последнюю поддерживаемую версию
+      groups:
+        # Добавьте здесь любые переменные окружения если нужны
+      xcode: latest
       cocoapods: default
     scripts:
       - name: Install system dependencies
@@ -14,49 +16,50 @@ workflows:
             pkg-config \
             cmake \
             gettext \
-            ninja
+            ninja \
+            wget
 
-      - name: Clone VCMI
+      - name: Clone VCMI with submodules
         script: |
-          git clone --recursive https://github.com/vcmi/vcmi.git
+          git clone --recursive --depth 1 https://github.com/vcmi/vcmi.git
           cd vcmi
 
-      - name: Configure for iOS
+      - name: Build iOS dependencies
+        script: |
+          cd vcmi
+          chmod +x ios-build-dependencies.sh
+          # Собираем зависимости для iOS
+          ./ios-build-dependencies.sh
+
+      - name: Configure VCMI project
         script: |
           cd vcmi
           mkdir -p build-ios
           cd build-ios
 
-          # Определяем минимальную версию iOS
-          export IOS_DEPLOYMENT_TARGET=10.0
-          
-          # Получаем путь к SDK
+          # Получаем путь к iOS SDK
           export SDK_PATH=$(xcrun --sdk iphoneos --show-sdk-path)
-          export SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
-
-          echo "Using iOS SDK: $SDK_PATH"
-          echo "SDK Version: $SDK_VERSION"
-
-      - name: Build dependencies
-        script: |
-          cd vcmi/build-ios
           
-          # Конфигурация CMake для iOS
+          # Конфигурация CMake согласно документации VCMI
           cmake .. \
-            -DCMAKE_SYSTEM_NAME=iOS \
-            -DCMAKE_OSX_SYSROOT=iphoneos \
-            -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_DEPLOYMENT_TARGET \
+            -DCMAKE_TOOLCHAIN_FILE=../cmake/ios.toolchain.cmake \
+            -DPLATFORM=OS64 \
+            -DDEPLOYMENT_TARGET=10.0 \
+            -DENABLE_BITCODE=OFF \
             -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_PREFIX_PATH=../ios-dependencies/install \
+            -DBOOST_ROOT=../ios-dependencies/install \
+            -DBoost_NO_SYSTEM_PATHS=ON \
+            -DCMAKE_FIND_ROOT_PATH=../ios-dependencies/install \
+            -DCMAKE_FRAMEWORK_PATH=../ios-dependencies/install \
             -DENABLE_TEST=OFF \
             -DENABLE_LAUNCHER=OFF \
-            -DENABLE_EDITOR=OFF \
-            -DCMAKE_INSTALL_PREFIX=../install-ios
+            -DENABLE_EDITOR=OFF
 
       - name: Build VCMI
         script: |
           cd vcmi/build-ios
-          
-          # Компиляция проекта
+          # Компиляция с использованием ninja (рекомендуется в документации VCMI)
           cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
 
       - name: Create IPA package
@@ -66,16 +69,20 @@ workflows:
           # Создание директории для .ipa
           mkdir -p Payload
           
-          # Поиск и копирование .app bundle
-          APP_BUNDLE=$(find . -name "*.app" -type d | head -1)
-          if [ -z "$APP_BUNDLE" ]; then
-            echo "Error: No .app bundle found!"
-            find . -name "*.app" -type d
-            exit 1
+          # Поиск .app bundle (должен быть в bin/Release)
+          if [ -d "bin/Release/vcmi.app" ]; then
+            cp -r "bin/Release/vcmi.app" Payload/
+          else
+            # Альтернативный поиск
+            APP_BUNDLE=$(find . -name "*.app" -type d | head -1)
+            if [ -z "$APP_BUNDLE" ]; then
+              echo "Error: No .app bundle found!"
+              find . -name "*.app" -type d
+              exit 1
+            fi
+            echo "Found app bundle: $APP_BUNDLE"
+            cp -r "$APP_BUNDLE" Payload/
           fi
-          
-          echo "Found app bundle: $APP_BUNDLE"
-          cp -r "$APP_BUNDLE" Payload/
           
           # Создание .ipa без подписи
           zip -r vcmi-ios-unsigned.ipa Payload
@@ -86,6 +93,7 @@ workflows:
     artifacts:
       - vcmi-ios-unsigned.ipa
       - vcmi/build-ios/**/*.app
+      - vcmi/build-ios/bin/Release/*.app
 
     publishing:
       email:
