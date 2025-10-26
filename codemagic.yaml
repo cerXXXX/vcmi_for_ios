@@ -15,11 +15,28 @@ workflows:
         script: |
           brew install cmake conan ccache
           conan profile detect --force
-          mkdir -p ~/.conan2
+          mkdir -p ~/.conan2/profiles
+
+      - name: Create iOS build profile for Conan
+        script: |
+          cat > ~/.conan2/profiles/ios-armv8 <<'EOF'
+          [settings]
+          os=iOS
+          os.version=10.0
+          arch=armv8
+          compiler=apple-clang
+          compiler.cppstd=17
+          compiler.libcxx=libc++
+          build_type=Release
+          [conf]
+          tools.build:cxxflags=["-stdlib=libc++"]
+          tools.build:compiler_executables={"c": "clang", "cpp": "clang++"}
+          EOF
+          echo "✅ Created Conan profile ios-armv8"
+          cat ~/.conan2/profiles/ios-armv8
 
       - name: Run Conan to install dependencies
         script: |
-          # Conan 2.x syntax
           conan install . \
             --output-folder=conan-generated \
             --build=missing \
