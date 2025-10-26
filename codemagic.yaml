@@ -1,139 +1,78 @@
 workflows:
-  build-vcmi-ios:
-    name: Build VCMI iOS (Release)
-    max_build_duration: 120
+  ios-workflow:
+    name: VCMI iOS Build
     environment:
-      xcode: latest
-      vars:
-        BUILD_PRESET: "ios-release-conan"
-        BUILD_TYPE: "Release"
-        BUNDLE_IDENTIFIER_PREFIX: "com.example"
-        DEFAULT_TEAM: "0000000000"
-        APP_NAME: "VCMI"
+      groups:
+        # Добавьте здесь любые переменные окружения если нужны
+      xcode: 14.2 # Xcode версии, которая поддерживает iOS 10
+      cocoapods: default
     scripts:
       - name: Install system dependencies
         script: |
-          brew update
-          brew install cmake conan ccache git git-lfs
-          git lfs install || true
-          conan --version
-          cmake --version
+          brew install \
+            autoconf \
+            automake \
+            libtool \
+            pkg-config \
+            cmake \
+            gettext \
+            ninja
 
-      - name: Ensure submodules (dependencies) are present (robust)
+      - name: Clone VCMI
         script: |
-          echo ">>> sync & init submodules (robust)"
-          git submodule sync --recursive || true
+          git clone --recursive https://github.com/vcmi/vcmi.git
+          cd vcmi
 
-          # Try shallow update first
-          git submodule update --init --recursive --depth 1 || true
-
-          # If dependencies missing, try full update
-          if [ ! -d dependencies ]; then
-            echo "dependencies not found after shallow update — trying full update"
-            git submodule update --init --recursive || true
-          fi
-
-          # If still missing, try direct clone of public repo
-          if [ ! -d dependencies ]; then
-            echo "dependencies still missing — attempting direct clone of vcmi-dependencies"
-            git clone --depth 1 https://github.com/vcmi/vcmi-dependencies.git dependencies || {
-              echo "Direct clone of dependencies failed — aborting"
-              exit 1
-            }
-          fi
-
-          # Pull LFS objects (without --all flag)
-          git lfs install || true
-          git lfs pull || true
-          if [ -d dependencies ]; then
-            (cd dependencies && git lfs pull) || true
-          fi
-
-          echo ">>> Submodule status:"
-          git submodule status --recursive || true
-          echo ">>> Listing dependencies directory (first 200 entries):"
-          ls -la dependencies || true
-          ls -la dependencies | sed -n '1,200p' || true
-
-      - name: Create Conan profiles (safe, no heredoc indentation issues)
+      - name: Build dependencies
         script: |
-          mkdir -p ~/.conan2/profiles
+          cd vcmi
+          mkdir -p build-ios
+          cd build-ios
 
-          # default build profile (macOS) - use valid os.version (13.0)
-          printf '%s\n' \
-            '[settings]' \
-            'os=Macos' \
-            'os.version=13.0' \
-            'arch=x86_64' \
-            'compiler=apple-clang' \
-            'compiler.version=14' \
-            'compiler.libcxx=libc++' \
-            'build_type=Release' > ~/.conan2/profiles/default
-          echo "Created ~/.conan2/profiles/default"
+          # Установка переменных для iOS кросс-компиляции
+          export IOS_VERSION_MIN=10.0
+          export IOS_SDK_VERSION=$(xcrun --sdk iphoneos --show-sdk-version)
+          export IOS_CMAKE_FLAGS="\
+            -DCMAKE_SYSTEM_NAME=iOS \
+            -DCMAKE_OSX_SYSROOT=iphoneos \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=$IOS_VERSION_MIN \
+            -DCMAKE_IOS_INSTALL_COMBINED=YES \
+            -DCMAKE_INSTALL_PREFIX=../install-ios \
+            -DCMAKE_BUILD_TYPE=Release"
 
-          # ios host profile (for device)
-          printf '%s\n' \
-            '[settings]' \
-            'os=iOS' \
-            'os.version=10.0' \
-            'arch=armv8' \
-            'compiler=apple-clang' \
-            'compiler.cppstd=17' \
-            'compiler.libcxx=libc++' \
-            'build_type=Release' \
-            '' \
-            '[conf]' \
-            'tools.build:cxxflags=["-stdlib=libc++"]' \
-            'tools.build:compiler_executables={"c": "clang", "cpp": "clang++"}' > ~/.conan2/profiles/ios-armv8
-          echo "Created ~/.conan2/profiles/ios-armv8"
+          # Сборка зависимостей
+          cmake .. $IOS_CMAKE_FLAGS \
+            -DENABLE_TEST=OFF \
+            -DENABLE_LAUNCHER=OFF \
+            -DENABLE_EDITOR=OFF \
+            -DENABLE_PCH=OFF
 
-          ls -la ~/.conan2/profiles || true
-          echo "---- default ----"
-          cat ~/.conan2/profiles/default || true
-          echo "---- ios-armv8 ----"
-          cat ~/.conan2/profiles/ios-armv8 || true
-
-      - name: Run Conan install (with PYTHONPATH)
+      - name: Build VCMI
         script: |
-          echo "PWD: $PWD"
-          export PYTHONPATH="$PWD:$PYTHONPATH"
-          echo "PYTHONPATH=$PYTHONPATH"
-          conan install . \
-            --output-folder=conan-generated \
-            --build=missing \
-            -pr:b=default \
-            -pr:h=ios-armv8
+          cd vcmi/build-ios
+          
+          # Компиляция проекта
+          cmake --build . --config Release --parallel $(sysctl -n hw.ncpu)
 
-      - name: Configure project with CMake preset
+      - name: Create IPA
         script: |
-          TEAM_ID=${DEVELOPMENT_TEAM:-$DEFAULT_TEAM}
-          cmake --preset $BUILD_PRESET \
-            -D BUNDLE_IDENTIFIER_PREFIX=$BUNDLE_IDENTIFIER_PREFIX \
-            -D CMAKE_BUILD_TYPE=$BUILD_TYPE \
-            -D ENABLE_CCACHE=ON \
-            -D CMAKE_XCODE_ATTRIBUTE_DEVELOPMENT_TEAM=$TEAM_ID \
-            -D CMAKE_XCODE_ATTRIBUTE_CODE_SIGN_STYLE=Automatic
-
-      - name: Build VCMI via CMake
-        script: |
-          cmake --build build-$BUILD_PRESET --target vcmiclient -- -quiet
-
-      - name: Package IPA using CPack
-        script: |
-          cd build-$BUILD_PRESET || exit 1
-          cpack -C Release || true
-          if ls *.zip >/dev/null 2>&1; then
-            ZIPFILE=$(ls *.zip | head -n 1)
-            mv "$ZIPFILE" "${ZIPFILE%.zip}.ipa"
-          fi
-          echo "Artifacts in $(pwd):"
-          ls -la
+          cd vcmi/build-ios
+          
+          # Создание структуры .ipa
+          mkdir -p Payload
+          cp -r bin/Release/*.app Payload/
+          
+          # Создание .ipa без подписи
+          zip -r vcmi-ios-unsigned.ipa Payload
+          
+          # Перемещение .ipa в корень проекта
+          mv vcmi-ios-unsigned.ipa $CM_BUILD_DIR/
 
     artifacts:
-      - build-ios-release-conan/*.ipa
-      - build-ios-release-conan/*.zip
+      - vcmi-ios-unsigned.ipa
+      - vcmi/build-ios/bin/Release/*.app
 
     publishing:
       email:
         recipients:
-          - your_email@example.com
+          - user@example.com # Замените на ваш email
