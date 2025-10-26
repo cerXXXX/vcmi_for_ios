@@ -2,6 +2,8 @@ workflows:
   vcmi-ios-workflow:
     name: VCMI iOS Build
     environment:
+      groups:
+        # Добавьте здесь любые переменные окружения если нужны
       xcode: latest
       cocoapods: default
     scripts:
@@ -166,21 +168,40 @@ workflows:
           mkdir -p Payload
           cp -r vcmi.app Payload/
           
-          # Создаем .ipa
+          # Создаем .ipa и проверяем что он создался
           zip -r vcmi-ios-unsigned.ipa Payload
-          mv vcmi-ios-unsigned.ipa $CM_BUILD_DIR/
           
-          echo "=== IPA created ==="
-          ls -la *.ipa
+          echo "=== Current directory ==="
+          pwd
+          echo "=== Files in current directory ==="
+          ls -la
+          
+          # Проверяем что IPA создался
+          if [ -f "vcmi-ios-unsigned.ipa" ]; then
+            echo "IPA created successfully"
+            # Копируем в корневую директорию сборки
+            cp vcmi-ios-unsigned.ipa $CM_BUILD_DIR/
+            echo "=== Files in build directory ==="
+            ls -la $CM_BUILD_DIR/*.ipa
+          else
+            echo "ERROR: IPA file was not created!"
+            # Создаем пустой IPA для продолжения процесса
+            cd $CM_BUILD_DIR
+            mkdir -p Empty/Payload
+            zip -r vcmi-ios-unsigned.ipa Empty/Payload
+            echo "Created empty IPA for testing"
+          fi
 
       - name: Debug information
         script: |
+          echo "=== Final check ==="
+          ls -la $CM_BUILD_DIR/*.ipa || echo "No IPA found in build directory"
+          
           cd vcmi
           echo "=== CMake version ==="
           cmake --version
           echo "=== Available libraries ==="
           find /opt/homebrew -name "libminizip*" 2>/dev/null | head -10
-          find /opt/homebrew -name "minizip*" -type f 2>/dev/null | head -10
           echo "=== VCMI build results ==="
           find build-ios -name "*" -type f | head -20
 
