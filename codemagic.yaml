@@ -1,5 +1,39 @@
 workflows:
-    sample-workflow:
-        name: Codemagic Sample Workflow
-        max_build_duration: 120
-        instance_type: mac_mini_m2
+  build-vcmi-ios:
+    name: Build VCMI for iPadOS 10
+    max_build_duration: 120
+    environment:
+      vars:
+        BUILD_TYPE: "Release"
+        IOS_DEPLOYMENT_TARGET: "10.0"
+        APP_NAME: "VCMI"
+      xcode: latest
+      cocoapods: default
+    scripts:
+      - name: Install dependencies
+        script: |
+          brew install cmake boost sdl2 sdl2_image sdl2_mixer sdl2_ttf
+
+      - name: Configure CMake for iOS
+        script: |
+          mkdir -p build && cd build
+          cmake .. \
+            -DCMAKE_TOOLCHAIN_FILE=../ios.toolchain.cmake \
+            -DIOS_PLATFORM=OS \
+            -DIOS_DEPLOYMENT_TARGET=$IOS_DEPLOYMENT_TARGET \
+            -DCMAKE_BUILD_TYPE=$BUILD_TYPE
+
+      - name: Build VCMI
+        script: |
+          cd build
+          cmake --build . --config $BUILD_TYPE
+
+      - name: Package .ipa
+        script: |
+          cd build
+          mkdir -p Payload
+          cp -r VCMI.app Payload/
+          zip -r $APP_NAME.ipa Payload
+
+    artifacts:
+      - build/*.ipa
